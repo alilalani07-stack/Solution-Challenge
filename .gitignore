@@ -1,2 +1,26 @@
-Solution Shit/
+# environment
+.env
+venv/
+
+# python cache
+__pycache__/
+*.pyc
+
+# logs
+*.log
+
+# system files
 .DS_Store
+
+# firebase / secrets
+serviceAccount.json
+
+# frontend dependencies
+node_modules/
+
+# builds
+dist/
+build/
+
+# project junk folder
+Solution Shit/
