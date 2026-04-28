@@ -13,46 +13,47 @@ export function useVolunteerTasks(volunteerId) {
       setLoading(false)
       return
     }
-    
+
     setLoading(true)
     const unsub = subscribeToVolunteerTasks(volunteerId, (data) => {
       setTasks(data || [])
-      
-      // Categorize tasks with flexible status matching
-      const pendingTasks = (data || []).filter(t => {
-        const status = t.status || t.match_status
-        return status === 'pending' || status === 'open' || status === 'recommended'
-      })
-      
-      const activeTasks = (data || []).filter(t => {
-        const status = t.status || t.match_status
-        return status === 'accepted' || status === 'active' || status === 'in_progress'
-      })
-      
-      // ✅ FIXED: Include 'declined' and 'rejected' in completed filter
-      const completedTasks = (data || []).filter(t => {
-        const status = t.status || t.match_status
-        return status === 'resolved' || 
-               status === 'completed' || 
-               status === 'closed' ||
-               status === 'declined' ||        // ✅ Added for declined tasks
-               status === 'rejected' ||        // ✅ Safety fallback
-               t.match_status === 'resolved' ||
-               t.match_status === 'completed' ||
-               t.match_status === 'declined' || // ✅ Added for match_status variant
-               t.match_status === 'rejected'
-      })
-      
+
+      // match_status is the single source of truth for a volunteer's view of a task.
+      // The adapter guarantees match_status is set correctly on every task object,
+      // so we never fall back to the raw `status` field here (which reflects the
+      // need's own lifecycle and would cause misrouting).
+
+      const pendingTasks = (data || []).filter(t =>
+        t.match_status === 'pending' ||
+        t.match_status === 'open' ||
+        t.match_status === 'recommended'
+      )
+
+      const activeTasks = (data || []).filter(t =>
+        t.match_status === 'accepted' ||
+        t.match_status === 'active' ||
+        t.match_status === 'in_progress'
+      )
+
+      // Completed = any terminal state. under_review means the volunteer submitted
+      // a resolution and is waiting for coordinator verification.
+      const completedTasks = (data || []).filter(t =>
+        t.match_status === 'under_review' ||
+        t.match_status === 'resolved' ||
+        t.match_status === 'completed' ||
+        t.match_status === 'closed' ||
+        t.match_status === 'declined' ||
+        t.match_status === 'rejected'
+      )
+
       setPending(pendingTasks)
       setActive(activeTasks)
       setCompleted(completedTasks)
       setLoading(false)
     })
-    
+
     return () => {
-      if (unsub && typeof unsub === 'function') {
-        unsub()
-      }
+      if (unsub && typeof unsub === 'function') unsub()
     }
   }, [volunteerId])
 

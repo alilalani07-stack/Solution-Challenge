@@ -30,7 +30,7 @@ export async function rejectNeed(needId) {
 
 export async function approveAndTriggerMatch(needId) {
   if (!isFirebaseConfigured) {
-    mockStore.updateNeed(needId, { status: 'open', needs_review: false })
+    mockStore.updateNeed(needId, { status: 'matched', needs_review: false })
     const need = mockStore.needs.find(n => n.id === needId)
     const matchedVols = mockStore.volunteers.filter(v => v.availability).slice(0, 3).map((v, i) => ({
       volunteer: v, match_score: 95 - i * 8, tier: i + 1,
@@ -39,25 +39,46 @@ export async function approveAndTriggerMatch(needId) {
     return { success: true, matches: matchedVols }
   }
 
-  // Step 1 — approve in Firestore
-  await updateDocument('needs', needId, { status: 'open', needs_review: false, updated_at: new Date() })
+  // ✅ Step 1 — First, just approve (keep status 'open' for now)
+  await updateDocument('needs', needId, { 
+    status: 'open',  // ← Keep as 'open' until we confirm matches
+    needs_review: false, 
+    updated_at: new Date()
+  })
 
-  // Step 2 — trigger Python matching engine
+  // ✅ Step 2 — Trigger Python matching engine
   const matchRes = await fetch(`${API}/run-matching`, { method: 'POST' })
-  if (!matchRes.ok) throw new Error('Matching engine failed')
+  if (!matchRes.ok) {
+    console.error('Matching engine failed')
+    // Keep as 'open' so volunteers can still see it
+    return { success: false, error: 'Matching engine failed', matches: [] }
+  }
 
-  // Step 3 — fetch resulting matches WITH volunteer details
+  // ✅ Step 3 — Fetch resulting matches
   const res = await fetch(`${API}/matches/${needId}`)
-  if (!res.ok) return { success: true, matches: [] }
+  
+  // ✅ Step 4 — ONLY update status to 'matched' if we actually got matches
+  if (res.ok) {
+    const data = await res.json()
+    const matches = (data.matches || []).map(m => ({
+      ...m,
+      match_score: Math.round((m.match_score || 0) * 100),
+      matchingSkills: m.volunteer_skills || [],
+    }))
 
-  const data = await res.json()
-  const matches = (data.matches || []).map(m => ({
-    ...m,
-    match_score:    Math.round((m.match_score || 0) * 100),
-    matchingSkills: m.volunteer_skills || [],
-  }))
+    if (matches.length > 0) {
+      // ✅ We have matches — now set status to 'matched'
+      await updateDocument('needs', needId, { 
+        status: 'matched',
+        updated_at: new Date()
+      })
+      return { success: true, matches }
+    }
+  }
 
-  return { success: true, matches }
+  // ✅ No matches found — keep status as 'open' so volunteers see it as a recommendation
+  console.log(`  📭 No matches found for need ${needId} — keeping status 'open'`)
+  return { success: true, matches: [], fallback: 'open_pool' }
 }
 
 export async function verifyResolution(needId, approved = true, notes = '') {

@@ -1,4 +1,4 @@
-import { useState, forwardRef } from 'react' // Added forwardRef
+import { useState, forwardRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { useForm as useRHForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -14,14 +14,14 @@ import LocationSearchInput from '../location/LocationSearchInput'
 import MapPreview from '../location/MapPreview'
 import { T } from '../../styles/tokens'
 
-// Fixed Textarea using forwardRef to handle React Hook Form refs
+// Fixed Textarea using forwardRef
 const Textarea = forwardRef(({ label, error, ...props }, ref) => {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', width: '100%', marginBottom: '16px' }}>
       {label && <label style={{ fontSize: '13px', fontWeight: 600, color: T.textSecondary, marginBottom: '6px' }}>{label}</label>}
       <textarea
         {...props}
-        ref={ref} // Attach the ref here
+        ref={ref}
         style={{
           width: '100%', padding: '12px 16px', border: `1.5px solid ${error ? T.urgent : T.border}`,
           borderRadius: T.radiusMd, fontSize: '14px', fontFamily: T.fontBody, background: T.white,
@@ -80,13 +80,15 @@ export default function NeedSubmitForm({ onSubmit, loading }) {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         async (pos) => {
-          setValue('location_coords', { lat: pos.coords.latitude, lng: pos.coords.longitude })
-          setValue('location_hint', `Current Location (${pos.coords.latitude.toFixed(2)}, ${pos.coords.longitude.toFixed(2)})`)
+          const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+          setValue('location_coords', coords)
+          setValue('location_hint', `Current Location (${pos.coords.latitude.toFixed(4)}, ${pos.coords.longitude.toFixed(4)})`)
         },
         () => {
           setLocMode('manual')
           alert('Could not access location. Please enter manually.')
-        }
+        },
+        { enableHighAccuracy: true, timeout: 10000 }
       )
     }
   }
@@ -222,15 +224,23 @@ export default function NeedSubmitForm({ onSubmit, loading }) {
                   </div>
                 )}
 
+                {/* ✅ UPDATED: Map Preview Section with Marker */}
                 {(formValues.location_hint || formValues.location_coords) && (
                   <div style={{ marginTop: '24px' }}>
                     <p style={{ fontSize: '14px', fontWeight: 700, color: T.textSecondary, marginBottom: '8px' }}>Selected Location:</p>
                     <div style={{ backgroundColor: T.surface2, padding: '12px', borderRadius: T.radiusMd, marginBottom: '16px', fontSize: '14px', fontWeight: 500, border: `1px solid ${T.border}` }}>
-                      {formValues.location_hint}
+                      {formValues.location_hint || 'Location coordinates set'}
                     </div>
                     {formValues.location_coords && (
-                      <MapPreview lat={formValues.location_coords.lat} lng={formValues.location_coords.lng} height="240px" />
-                    )}
+  <MapPreview 
+    lat={formValues.location_coords.lat} 
+    lng={formValues.location_coords.lng} 
+    height="280px"
+    zoom={15}
+    showSingleMarker={true}  // ✅ Enable red pin mode
+    singleMarkerColor="#ef4444"  // ✅ Red color
+  />
+)}
                   </div>
                 )}
                 {errors.location_hint && !formValues.location_hint && <p style={{ color: T.urgent, fontSize: '14px' }}>Please select or enter a location to continue.</p>}

@@ -91,7 +91,7 @@ export default function NeedTracker({ need }) {
 
         <Timeline steps={steps} style={{ marginLeft: '8px' }} />
 
-        {/* ✅ NEW: ACTIVE STATE BLOCK */}
+        {/* ✅ ACTIVE STATE BLOCK (ADDED ONLY) */}
         {need.status === 'active' && (
           <div style={{
             marginTop: 20, padding: 20,
@@ -107,7 +107,7 @@ export default function NeedTracker({ need }) {
           </div>
         )}
 
-        {/* ✅ NEW: RESOLVED STATE BLOCK */}
+        {/* ✅ RESOLVED STATE BLOCK (ADDED ONLY) */}
         {need.status === 'resolved' && (
           <div style={{
             marginTop: 20,
@@ -154,11 +154,75 @@ export default function NeedTracker({ need }) {
         )}
       </Card>
 
-      {/* Right side unchanged */}
-      {/* (kept exactly as-is) */}
-
+      {/* Right: Details & Volunteer Info */}
       <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-        {/* ...rest of your code unchanged */}
+        <Card padding="20px">
+          <h3 style={{ fontWeight: 700, fontSize: '14px', color: T.textSecondary, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '16px' }}>Request Details</h3>
+          
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+            <div style={{ width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backgroundColor: category.color ? category.color + '20' : T.primaryLight, color: category.color || T.primary }}>
+              <span style={{ fontSize: '18px', lineHeight: 1 }}>{category.icon}</span>
+            </div>
+            <div>
+              <p style={{ fontWeight: 500, fontSize: '14px', color: T.textPrimary }}>{category.label}</p>
+              <p style={{ fontSize: '12px', color: T.textTertiary }}>Category</p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px', marginBottom: '16px' }}>
+            <div style={{ width: '32px', height: '32px', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, backgroundColor: urgency.bg, color: urgency.color }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: 'currentColor' }} />
+            </div>
+            <div>
+              <p style={{ fontWeight: 500, fontSize: '14px', color: T.textPrimary }}>{urgency.label}</p>
+              <p style={{ fontSize: '12px', color: T.textTertiary }}>Urgency</p>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', alignItems: 'flex-start', gap: '12px' }}>
+            <div style={{ width: '32px', height: '32px', borderRadius: '50%', backgroundColor: T.surface3, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.textSecondary, flexShrink: 0 }}>
+              <MapPin size={14} />
+            </div>
+            <div>
+              <p style={{ fontWeight: 500, fontSize: '14px', color: T.textPrimary, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>{need.location_hint}</p>
+              <p style={{ fontSize: '12px', color: T.textTertiary }}>Location</p>
+            </div>
+          </div>
+
+          <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: `1px solid ${T.border}` }}>
+            <p style={{ fontSize: '14px', color: T.textSecondary, fontStyle: 'italic', display: '-webkit-box', WebkitLineClamp: 3, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
+              "{need.raw_report}"
+            </p>
+            <p style={{ fontSize: '12px', color: T.textTertiary, marginTop: '8px' }}>
+              Submitted {timeAgo(need.submitted_at)}
+            </p>
+          </div>
+        </Card>
+
+        {(need.status === 'matched' || need.status === 'active' || need.status === 'resolved') && (
+          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }}>
+            <Card padding="20px" style={{ backgroundColor: 'rgba(235, 240, 255, 0.3)', border: `1px solid rgba(0, 87, 255, 0.2)` }}>
+              <h3 style={{ fontWeight: 700, fontSize: '14px', color: T.primary, textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '16px' }}>
+                Assigned Volunteer
+              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '16px' }}>
+                <div style={{ width: '40px', height: '40px', borderRadius: '50%', backgroundColor: T.primary, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.white, fontWeight: 700, boxShadow: T.shadowSm }}>
+                  V
+                </div>
+                <div>
+                  <p style={{ fontWeight: 700, color: T.textPrimary, display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    Volunteer <Badge variant="tier" value={need.match_tier || 1} />
+                  </p>
+                  <p style={{ fontSize: '12px', color: T.textSecondary }}>Verified Member</p>
+                </div>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '14px', fontWeight: 500, color: T.textSecondary, backgroundColor: T.surface, borderRadius: T.radiusMd, padding: '8px', border: `1px solid ${T.border}` }}>
+                <Phone size={14} color={T.primary} />
+                They will contact you soon
+              </div>
+            </Card>
+          </motion.div>
+        )}
       </div>
     </div>
   )

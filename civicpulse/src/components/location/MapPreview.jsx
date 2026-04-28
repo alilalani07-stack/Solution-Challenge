@@ -1,174 +1,201 @@
-import { useEffect, useState } from 'react'
-import { MapPin } from 'lucide-react'
-import { T } from '../../styles/tokens'
+// components/location/MapPreview.jsx
+// Leaflet + OpenStreetMap — no API key required
+import { useEffect, useRef, useCallback } from 'react'
 
-// Dynamic Leaflet import for Vite compatibility
+/**
+ * Props:
+ *   lat, lng, zoom      — map centre & zoom level
+ *   markers             — [{ id, lat, lng, color, pulsing, popup, onClick }]
+ *   selectedId          — id of the currently highlighted marker
+ *   height              — css height string (default '100%')
+ *   showSingleMarker    — if true, show a single red pin at lat/lng (volunteer mode)
+ *   singleMarkerColor   — color for the single pin (default '#ef4444')
+ */
 export default function MapPreview({
-  lat,
-  lng,
-  zoom = 5,
+  lat = 20.5937,
+  lng = 78.9629,
+  zoom = 4,
   markers = [],
-  selectedId = null,
-  height = '350px',
-  clusterMarkers = false,
-  showSelectedPulse = true,
-  popupMaxWidth = 200,
-  onMarkerClick
+  selectedId,
+  height = '100%',
+  showSingleMarker = false,
+  singleMarkerColor = '#ef4444',
 }) {
-  const [Leaflet, setLeaflet] = useState(null)
-  const [mapInstance, setMapInstance] = useState(null)
+  const containerRef = useRef(null)
+  const mapRef       = useRef(null)
+  const markersRef   = useRef([])
 
-  // Load Leaflet dynamically
+  // ✅ FIX: Constrain Leaflet controls z-index so they don't overlap modals/drawers
   useEffect(() => {
-    let mounted = true
-    const loadLeaflet = async () => {
-      try {
-        const { MapContainer, TileLayer, Marker, Popup } = await import('react-leaflet')
-        const L = await import('leaflet')
-        
-        // Fix marker icon paths for Vite
-        delete L.default.Icon.Default.prototype._getIconUrl
-        L.default.Icon.Default.mergeOptions({
-          iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-          iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-          shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
-        })
-        
-        if (mounted) {
-          setLeaflet({ MapContainer, TileLayer, Marker, Popup, L: L.default })
-        }
-      } catch (err) {
-        console.error('Failed to load Leaflet:', err)
-      }
+    const styleId = 'leaflet-control-zindex-fix'
+    if (!document.getElementById(styleId)) {
+      const style = document.createElement('style')
+      style.id = styleId
+      style.textContent = `
+        .leaflet-control { z-index: 10 !important; }
+        .leaflet-top, .leaflet-bottom { z-index: 10 !important; }
+      `
+      document.head.appendChild(style)
     }
-    loadLeaflet()
-    return () => { mounted = false }
   }, [])
 
-  // Update map view when center/zoom changes
-  useEffect(() => {
-    if (mapInstance && Leaflet) {
-      mapInstance.setView([lat, lng], zoom)
-    }
-  }, [lat, lng, zoom, mapInstance, Leaflet])
-
-  if (!Leaflet) {
-    return (
-      <div style={{ height, background: T.surface2, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.textSecondary }}>
-        Loading map...
-      </div>
-    )
-  }
-
-  const { MapContainer, TileLayer, Marker, Popup, L } = Leaflet
-
-  // Custom marker icon with priority-based coloring
-  const createMarkerIcon = (marker) => {
-    const { color, pulsing } = marker
+  // ── Red pin icon for single-marker mode ───────────────────────────────────
+  const makeRedPinIcon = useCallback((L, color = '#ef4444') => {
     return L.divIcon({
       className: '',
       html: `
-        <div style="
-          position: relative;
-          width: 28px;
-          height: 28px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-        ">
-          ${pulsing ? `
-            <div style="
-              position: absolute;
-              width: 100%;
-              height: 100%;
-              border-radius: 50%;
-              background: ${color};
-              opacity: 0.3;
-              animation: pulse 2s infinite;
-            "></div>
-            <style>@keyframes pulse { 0% { transform: scale(1); opacity: 0.3; } 70% { transform: scale(1.5); opacity: 0; } 100% { transform: scale(1); opacity: 0; } }</style>
-          ` : ''}
+        <div style="position: relative; width: 32px; height: 32px; display: flex; align-items: center; justify-content: center;">
           <div style="
-            width: 24px;
-            height: 24px;
-            border-radius: 50%;
+            width: 26px; height: 26px;
             background: ${color};
             border: 3px solid white;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+            display: flex; align-items: center; justify-content: center;
           ">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="white">
-              <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7z"/>
-            </svg>
+            <div style="width: 6px; height: 6px; border-radius: 50%; background: white; transform: rotate(45deg);"></div>
           </div>
         </div>
       `,
-      iconSize: [28, 28],
-      iconAnchor: [14, 28],
-      popupAnchor: [0, -28]
+      iconSize: [32, 32],
+      iconAnchor: [16, 32],
+      popupAnchor: [0, -32],
     })
-  }
+  }, [])
 
-  // Selected marker gets extra pulse ring
-  const createSelectedIcon = (marker) => {
-    const baseIcon = createMarkerIcon(marker)
-    if (showSelectedPulse) {
-      return L.divIcon({
+  // Stable draw function — recreates all markers on the live map instance
+  const syncMarkers = useCallback(() => {
+    const map = mapRef.current
+    const L   = window.L
+    if (!map || !L) return
+
+    // Clear existing markers
+    markersRef.current.forEach(m => m.remove())
+    markersRef.current = []
+
+    // ✅ Single-marker mode (volunteer dashboard)
+    if (showSingleMarker && lat != null && lng != null) {
+      const icon = makeRedPinIcon(L, singleMarkerColor)
+      const marker = L.marker([lat, lng], { icon })
+      marker.bindPopup('<div style="font-family:sans-serif;font-size:13px;font-weight:600;">Selected Location</div>', { closeButton: false, offset: [0, -4] })
+      marker.addTo(map)
+      markersRef.current.push(marker)
+      return // Skip multi-marker logic
+    }
+
+    // ✅ Multi-marker mode (coordinator dashboard)
+    ;(markers || []).forEach(({ id, lat: mLat, lng: mLng, color = '#3B82F6', pulsing, popup, onClick }) => {
+      if (mLat == null || mLng == null) return
+
+      const isSelected = id === selectedId
+      const outer = isSelected ? 22 : 16
+      const inner = isSelected ? 10 : 7
+
+      const icon = L.divIcon({
         className: '',
         html: `
-          <div style="position: relative;">
-            ${baseIcon.options.html}
-            <div style="
-              position: absolute;
-              top: -4px; left: -4px;
-              width: 36px; height: 36px;
-              border-radius: 50%;
-              border: 2px solid ${marker.color};
-              animation: pulse-ring 1.5s infinite;
-            "></div>
-            <style>@keyframes pulse-ring { 0% { transform: scale(0.8); opacity: 1; } 100% { transform: scale(1.3); opacity: 0; } }</style>
+          <div style="position:relative;width:${outer}px;height:${outer}px;display:flex;align-items:center;justify-content:center;">
+            <div style="position:absolute;inset:0;border-radius:50%;border:2.5px solid ${color};background:${color}22;box-shadow:0 2px 8px ${color}55;${pulsing ? 'animation:lfpulse 1.6s ease-out infinite;' : ''}"></div>
+            <div style="width:${inner}px;height:${inner}px;border-radius:50%;background:${color};box-shadow:0 1px 4px rgba(0,0,0,0.3);"></div>
           </div>
+          <style>@keyframes lfpulse{0%{box-shadow:0 0 0 0 ${color}66}70%{box-shadow:0 0 0 10px ${color}00}100%{box-shadow:0 0 0 0 ${color}00}}</style>
         `,
-        iconSize: [36, 36],
-        iconAnchor: [18, 36],
-        popupAnchor: [0, -36]
+        iconSize:    [outer, outer],
+        iconAnchor:  [outer / 2, outer / 2],
+        popupAnchor: [0, -(outer / 2 + 4)],
       })
+
+      const marker = L.marker([mLat, mLng], { icon })
+
+      if (popup) {
+        marker.bindPopup(
+          `<div style="font-family:sans-serif;font-size:13px;font-weight:600;min-width:100px;line-height:1.4;">${popup}</div>`,
+          { closeButton: false, offset: [0, -4] }
+        )
+      }
+
+      if (typeof onClick === 'function') {
+        marker.on('click', () => onClick(id))
+      } else if (popup) {
+        marker.on('click', () => marker.openPopup())
+      }
+
+      marker.addTo(map)
+      markersRef.current.push(marker)
+    })
+  }, [markers, selectedId, showSingleMarker, lat, lng, singleMarkerColor, makeRedPinIcon])
+
+  // ── Bootstrap Leaflet exactly once ────────────────────────────────────────
+  useEffect(() => {
+    if (mapRef.current) return // already initialised
+
+    // Inject CSS if absent
+    if (!document.getElementById('leaflet-css')) {
+      const link = document.createElement('link')
+      link.id   = 'leaflet-css'
+      link.rel  = 'stylesheet'
+      link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css'
+      document.head.appendChild(link)
     }
-    return baseIcon
-  }
+
+    function init() {
+      if (!containerRef.current || mapRef.current) return
+      const L = window.L
+      if (!L) return
+
+      const map = L.map(containerRef.current, {
+        center:             [lat, lng],
+        zoom,
+        zoomControl:        true,
+        scrollWheelZoom:    false,
+        attributionControl: false,
+      })
+
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+      }).addTo(map)
+
+      mapRef.current = map
+      syncMarkers() // draw any markers that arrived before the map was ready
+    }
+
+    if (window.L) {
+      init()
+    } else if (!document.getElementById('leaflet-js')) {
+      const script  = document.createElement('script')
+      script.id     = 'leaflet-js'
+      script.src    = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
+      script.onload = init
+      document.head.appendChild(script)
+    } else {
+      // Script tag already injected by another instance — wait for it
+      document.getElementById('leaflet-js').addEventListener('load', init)
+    }
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove()
+        mapRef.current = null
+      }
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps — intentional one-time init
+
+  // ── Re-centre when lat/lng/zoom change ───────────────────────────────────
+  useEffect(() => {
+    if (!mapRef.current) return
+    mapRef.current.setView([lat, lng], zoom)
+  }, [lat, lng, zoom])
+
+  // ── Redraw markers whenever they change ──────────────────────────────────
+  useEffect(() => {
+    syncMarkers()
+  }, [syncMarkers])
 
   return (
-    <div style={{ height, width: '100%', borderRadius: 'inherit', overflow: 'hidden' }}>
-      <MapContainer
-        center={[lat, lng]}
-        zoom={zoom}
-        scrollWheelZoom={true}
-        zoomControl={true}
-        style={{ height: '100%', width: '100%' }}
-        whenCreated={setMapInstance}
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        
-        {markers.map(marker => (
-          <Marker
-            key={marker.id}
-            position={[marker.lat, marker.lng]}
-            icon={marker.id === selectedId ? createSelectedIcon(marker) : createMarkerIcon(marker)}
-            eventHandlers={{
-              click: () => onMarkerClick?.(marker)
-            }}
-          >
-            <Popup maxWidth={popupMaxWidth}>
-              <div dangerouslySetInnerHTML={{ __html: marker.popup }} />
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
-    </div>
+    <div
+      ref={containerRef}
+      style={{ width: '100%', height, minHeight: height, borderRadius: 'inherit' }}
+    />
   )
 }

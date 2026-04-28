@@ -80,17 +80,7 @@ export async function setVolunteerAvailability(uid, available) {
 // ── Task subscription ────────────────────────────────────────────────────────
 export function subscribeToVolunteerTasks(volunteerId, callback) {
   if (!isFirebaseConfigured || !volunteerId) {
-    const mockTasks = [
-      {
-        id: 'demo-1', need_id: 'need-1',
-        title: 'Demo Task', description: 'Urgent help needed',
-        category: 'Medical', urgency: 'high',
-        location: 'Hyderabad', status: 'pending',
-        match_status: 'pending', is_recommendation: true,
-        created_at: new Date().toISOString()
-      }
-    ]
-    callback(mockTasks)
+    callback([])
     return () => {}
   }
 
@@ -98,22 +88,32 @@ export function subscribeToVolunteerTasks(volunteerId, callback) {
 
   const setupSubscription = async () => {
     try {
+      // 1️⃣ Subscribe to personal matches
       unsubscribe = subscribeToCollection(
         'matches',
         [{ field: 'volunteer_id', op: '==', value: volunteerId }],
         async (matches) => {
-          if (!matches || matches.length === 0) {
-            // No matches — show open needs as recommendations
-            const openDocs = await queryDocuments('needs', [
-              { field: 'status', op: '==', value: 'open' }
-            ])
-            const recommended = openDocs.map(n => ({
+          console.log(`📥 [Volunteer ${volunteerId.slice(-6)}] Raw matches from Firestore:`, matches?.length || 0)
+
+          // 2️⃣ Fetch open recommendations
+          const openDocs = await queryDocuments('needs', [
+            { field: 'status', op: '==', value: 'open' }
+          ])
+
+          const recommended = (openDocs || [])
+            .filter(n => {
+    const isOpen = n.status === 'open'
+    // ✅ ALSO include 'matched' tasks that have no assigned_volunteer_id AND no match docs
+    const isUnassignedMatch = n.status === 'matched' && !n.assigned_volunteer_id
+    return (isOpen || isUnassignedMatch) && !n.assigned_volunteer_id
+  })
+            .map(n => ({
               id: n.id,
               need_id: n.id,
               title: n.summary || n.raw_report?.slice(0, 60) || 'Untitled Need',
               description: n.raw_report || n.summary || '',
               category: n.category || 'General',
-              urgency: n.urgency || 'medium',
+              urgency: n.urgency || 5,
               location: n.location_hint || n.raw_location || 'Unknown',
               location_hint: n.location_hint || n.raw_location,
               coords: n.location_coords,
@@ -123,24 +123,29 @@ export function subscribeToVolunteerTasks(volunteerId, callback) {
               created_at: n.submitted_at || n.created_at,
               raw_report: n.raw_report,
               summary: n.summary,
-              ...n
+              ...n,
+              is_recommendation: true,
             }))
-            callback(recommended)
-            return
-          }
 
-          // Enrich matches with need data
+          // 3️⃣ Enrich personal matches
           const enriched = await Promise.all(
-            matches.map(async (match) => {
+            (matches || []).map(async (match) => {
               try {
                 const need = await getDocument('needs', match.need_id)
+                
+                // 🛑 ONLY hide if explicitly assigned to a DIFFERENT volunteer
+                if (need?.assigned_volunteer_id && need.assigned_volunteer_id !== volunteerId) {
+                  console.log(` [Hidden] Match ${match.id} blocked: assigned to ${need.assigned_volunteer_id}`)
+                  return null
+                }
+
                 return {
                   id: match.id,
                   need_id: match.need_id,
                   title: need?.summary || need?.raw_report?.slice(0, 60) || 'Untitled Task',
                   description: need?.raw_report || need?.summary || '',
                   category: need?.category || match.category || 'General',
-                  urgency: need?.urgency || match.urgency || 'medium',
+                  urgency: need?.urgency || match.urgency || 5,
                   location: need?.location_hint || need?.raw_location || match.location || 'Unknown',
                   location_hint: need?.location_hint || need?.raw_location,
                   coords: need?.location_coords || match.coords,
@@ -156,11 +161,12 @@ export function subscribeToVolunteerTasks(volunteerId, callback) {
                   id: match.id,
                   need_id: match.need_id,
                 }
-              } catch {
+              } catch (err) {
+                console.warn(`⚠️ Failed to enrich match ${match.id}:`, err)
                 return {
                   ...match,
                   id: match.id,
-                  title: 'Task',
+                  title: 'Task (enrichment failed)',
                   status: match.status || 'pending',
                   match_status: match.status || 'pending',
                   is_recommendation: false
@@ -168,11 +174,18 @@ export function subscribeToVolunteerTasks(volunteerId, callback) {
               }
             })
           )
-          callback(enriched)
+
+          const validEnriched = enriched.filter(m => m !== null)
+          const allTasks = [...validEnriched, ...recommended]
+          
+          console.log(`📦 [Volunteer ${volunteerId.slice(-6)}] Final tasks sent to UI:`, allTasks.length, 
+            `(${validEnriched.length} matches, ${recommended.length} recommendations)`)
+          
+          callback(allTasks)
         }
       )
     } catch (err) {
-      console.error('Subscription failed:', err.message)
+      console.error('❌ Subscription failed:', err.message)
       callback([])
       setTimeout(() => {
         if (unsubscribe) unsubscribe()
@@ -232,21 +245,21 @@ async function createMatchFromNeed(needId, volunteerId) {
     const matchRef = doc(db, 'matches', matchId)
 
     await setDoc(matchRef, {
-      need_id:      needId,
+      need_id: needId,
       volunteer_id: volunteerId,
-      status:       'accepted',
-      created_at:   st,
-      accepted_at:  st,
-      updated_at:   st,
-      category:     need?.category || null,
-      urgency:      need?.urgency  || null,
-      location:     need?.location_hint || need?.raw_location || null,
+      status: 'accepted',
+      created_at: st,
+      accepted_at: st,
+      updated_at: st,
+      category: need?.category || null,
+      urgency: need?.urgency || null,
+      location: need?.location_hint || need?.raw_location || null,
     })
 
     await updateDocument('needs', needId, {
-      status:                'active',
+      status: 'active',
       assigned_volunteer_id: volunteerId,
-      updated_at:            new Date()
+      updated_at: new Date()
     })
 
     return { success: true, matchId }
@@ -264,24 +277,22 @@ export async function declineTask(taskId, volunteerId, isMatch = false) {
   }
 
   if (isMatch) {
-    // Update the match document to declined
     await updateDocument('matches', taskId, {
       status: 'declined',
       updated_at: new Date()
     })
   } else {
-    // It was a recommendation (open need) — create a declined match record
     try {
       const { doc, setDoc } = await import('firebase/firestore')
       const { db } = await import('../firebase/config')
       const st = await getServerTimestamp()
       const matchId = `${taskId}_${volunteerId}_declined`
       await setDoc(doc(db, 'matches', matchId), {
-        need_id:      taskId,
+        need_id: taskId,
         volunteer_id: volunteerId,
-        status:       'declined',
-        created_at:   st,
-        updated_at:   st,
+        status: 'declined',
+        created_at: st,
+        updated_at: st,
       })
     } catch (err) {
       console.error('Error creating declined match:', err)
@@ -291,14 +302,15 @@ export async function declineTask(taskId, volunteerId, isMatch = false) {
 }
 
 // ── Resolve ──────────────────────────────────────────────────────────────────
+// ✅ FIXED: Handle need_id fallback for recommendations
 export async function submitResolution(taskId, needId, data) {
   const updates = {
-    status:            'resolved',
-    resolved_at:       new Date(),
-    resolution_notes:  data.notes || data.outcome || '',
+    status: 'under_review',
+    resolved_at: new Date(),
+    resolution_notes: data.notes || data.outcome || '',
     volunteers_helped: data.people_helped || data.beneficiaries || 1,
-    verified:          false,
-    updated_at:        new Date()
+    verified: false,
+    updated_at: new Date()
   }
 
   if (!isFirebaseConfigured) {
@@ -308,15 +320,17 @@ export async function submitResolution(taskId, needId, data) {
 
   try {
     await updateDocument('matches', taskId, {
-      status:     'resolved',
+      status: 'under_review',
       updated_at: new Date()
     })
   } catch {
     // match may not exist if this was a recommendation
   }
 
-  if (needId) {
-    await updateDocument('needs', needId, updates)
+  // ✅ FIXED: Use needId fallback to taskId for recommendations
+  const targetNeedId = needId || taskId
+  if (targetNeedId) {
+    await updateDocument('needs', targetNeedId, updates)
   }
 
   return { success: true }

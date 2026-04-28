@@ -1,10 +1,8 @@
-import { useState, useCallback, useEffect } from 'react'
+import { useState, useCallback, useMemo } from 'react'
 import { useNavigate } from 'react-router'
 import { motion, AnimatePresence } from 'framer-motion'
 import { PlayCircle, CheckCircle2, Zap, MapPin, Star } from 'lucide-react'
-
-// Leaflet CSS only (components loaded dynamically to avoid Vite bundling issues)
-import 'leaflet/dist/leaflet.css'
+import MapPreview from '../../components/location/MapPreview'
 
 import PageTransition from '../../components/layout/PageTransition'
 import Tabs from '../../components/ui/Tabs'
@@ -19,401 +17,370 @@ import {
   acceptTask,
   declineTask,
   submitResolution,
-  setVolunteerAvailability
+  setVolunteerAvailability,
 } from '../../adapters/volunteerAdapter'
 
 import { showSuccess, showError } from '../../components/ui/Toast'
 import { T } from '../../styles/tokens'
 import useIsMobile from '../../hooks/useIsMobile'
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+// ── Coord normaliser ──────────────────────────────────────────────────────────
 function normalizeCoords(task) {
   if (!task) return null
-
-  // 1. Check direct coordinate objects first
-  const c = task.coords || task.location_coords || task.locationCoords
-  if (c) {
-    if (Array.isArray(c) && c.length >= 2) return { lat: c[0], lng: c[1] }
-    if (typeof c === 'object' && c.lat != null && c.lng != null) return { lat: c.lat, lng: c.lng }
-  }
-
-  // 2. Extract coordinates from string fields
-  // Priority: raw_location -> location_hint -> location
-  const str = task.raw_location || task.location_hint || task.location || ''
-  
-  if (str && typeof str === 'string') {
-    // Regex to find (lat, lng) pattern, e.g., "(17.53, 78.38)" or "17.53, 78.38"
-    const match = str.match(/\(([-\d.]+),\s*([-\d.]+)\)/) || str.match(/^([-\d.]+),\s*([-\d.]+)$/)
+  // ✅ Check all possible coordinate field names
+  const c = task.coords || task.location_coords || task.locationCoords || task.geo || null
+  if (!c) return null
+  if (Array.isArray(c) && c.length >= 2) return { lat: Number(c[0]), lng: Number(c[1]) }
+  if (typeof c === 'string') {
+    const parts = c.split(',').map(n => parseFloat(n.trim()))
+    if (parts.length === 2 && !isNaN(parts[0]) && !isNaN(parts[1])) return { lat: parts[0], lng: parts[1] }
+    // Extract from "(lat, lng)" format
+    const match = c.match(/\(([-\d.]+),\s*([-\d.]+)\)/)
     if (match) {
       const lat = parseFloat(match[1])
       const lng = parseFloat(match[2])
-      // Validate that parsed numbers are actually numbers
-      if (!isNaN(lat) && !isNaN(lng)) {
-        return { lat, lng }
-      }
+      if (!isNaN(lat) && !isNaN(lng)) return { lat, lng }
     }
   }
-
+  if (c && typeof c === 'object' && c.lat != null && c.lng != null) return { lat: Number(c.lat), lng: Number(c.lng) }
   return null
 }
 
+// ── Derived state helper ──────────────────────────────────────────────────────
 function getState(task) {
-  const s = task.status || task.match_status
-  if (['resolved', 'completed', 'closed', 'declined', 'rejected'].includes(s)) return 'completed'
+  const s = task.match_status || task.status || ''
+  if (['resolved', 'completed', 'closed', 'declined', 'rejected', 'under_review'].includes(s)) return 'completed'
   if (['active', 'accepted', 'in_progress'].includes(s)) return 'active'
   return 'pending'
 }
 
-function getUrgencyColor(urgency) {
-  if (!urgency) return { bg: '#FEF3C7', color: '#D97706', label: 'MEDIUM' }
+function getUrgencyStyle(urgency) {
   const u = typeof urgency === 'number' ? urgency : 5
   if (u >= 8) return { bg: '#FEE2E2', color: '#DC2626', label: 'CRITICAL' }
   if (u >= 6) return { bg: '#FEF3C7', color: '#D97706', label: 'HIGH' }
   return { bg: '#D1FAE5', color: '#059669', label: 'LOW' }
 }
 
-// ── Map Component (Leaflet - Vite compatible) ───────────────────────────────
-function TaskMap({ task }) {
-  const [LeafletMap, setLeafletMap] = useState(null)
-  const coords = normalizeCoords(task)
-
-  // Dynamically load Leaflet to bypass Vite's CommonJS/ESM mismatch
-  useEffect(() => {
-    let mounted = true
-    const loadLeaflet = async () => {
-      try {
-        const { MapContainer, TileLayer, Marker, Popup } = await import('react-leaflet')
-        const L = await import('leaflet')
-        
-        // Fix default marker icon paths for Vite/Webpack
-        delete L.default.Icon.Default.prototype._getIconUrl
-        L.default.Icon.Default.mergeOptions({
-          iconRetinaUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png',
-          iconUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png',
-          shadowUrl: 'https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png'
-        })
-        
-        if (mounted) {
-          setLeafletMap({ MapContainer, TileLayer, Marker, Popup })
-        }
-      } catch (err) {
-        console.error('Failed to load Leaflet:', err)
-      }
-    }
-    loadLeaflet()
-    return () => { mounted = false }
-  }, [])
-
-  // Handle missing task
-  if (!task) {
-    return (
-      <div style={{
-        height: 220, borderRadius: 16, background: T.surface2,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: T.textSecondary, fontSize: 13, flexDirection: 'column', gap: 6
-      }}>
-        <MapPin size={20} color={T.textTertiary} />
-        Select a task to view location
-      </div>
-    )
+// ── Status pill ───────────────────────────────────────────────────────────────
+function StatusTag({ status, verified }) {  // ✅ Added verified prop
+  const STYLES = {
+    pending: { label: 'Pending', bg: '#EFF6FF', color: '#3B82F6' },
+    open: { label: 'Open', bg: '#EFF6FF', color: '#3B82F6' },
+    recommended: { label: 'Recommended', bg: '#EFF6FF', color: '#3B82F6' },
+    accepted: { label: 'Active', bg: '#D1FAE5', color: '#059669' },
+    active: { label: 'Active', bg: '#D1FAE5', color: '#059669' },
+    in_progress: { label: 'Active', bg: '#D1FAE5', color: '#059669' },
+    resolved: { label: 'Resolved', bg: '#D1FAE5', color: '#059669' },
+    completed: { label: 'Completed', bg: '#D1FAE5', color: '#059669' },
+    // ✅ Updated: Show "Verified" when resolved + verified
+    under_review: { 
+      label: verified ? 'Verified' : 'Under Review', 
+      bg: verified ? '#D1FAE5' : '#FEF3C7', 
+      color: verified ? '#059669' : '#D97706' 
+    },
+    declined: { label: 'Declined', bg: '#FEE2E2', color: '#DC2626' },
+    rejected: { label: 'Rejected', bg: '#FEE2E2', color: '#DC2626' },
+    closed: { label: 'Closed', bg: '#F3F4F6', color: '#6B7280' },
   }
-
-  // Handle task with no coords
-  if (!coords) {
-    return (
-      <div style={{
-        height: 220, borderRadius: 16, background: T.surface2,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: T.textSecondary, fontSize: 13, flexDirection: 'column', gap: 6
-      }}>
-        <MapPin size={20} color={T.textTertiary} />
-        No coordinates available for this task
-      </div>
-    )
-  }
-
-  // ✅ FIX: If map library isn't loaded yet, show loading state instead of crashing
-  if (!LeafletMap) {
-    return (
-      <div style={{
-        height: 220, borderRadius: 16, background: T.surface2,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: T.textSecondary, fontSize: 13
-      }}>
-        Loading map engine...
-      </div>
-    )
-  }
-
-  // ✅ Now safe to destructure since we know LeafletMap is not null
-  const { MapContainer, TileLayer, Marker, Popup } = LeafletMap
-
-  return (
-    <div style={{ height: 220, borderRadius: 16, overflow: 'hidden', border: `1px solid ${T.border}` }}>
-      <MapContainer
-        center={[coords.lat, coords.lng]}
-        zoom={14}
-        scrollWheelZoom={false}
-        style={{ height: '100%', width: '100%' }}
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
-        <Marker position={[coords.lat, coords.lng]}>
-          <Popup>{task?.title || 'Task Location'}</Popup>
-        </Marker>
-      </MapContainer>
-    </div>
-  )
-}
-
-// ── Status tag ────────────────────────────────────────────────────────────────
-function StatusTag({ status }) {
-  const map = {
-    pending:    { label: 'Pending',    bg: '#EFF6FF', color: '#3B82F6' },
-    open:       { label: 'Open',       bg: '#EFF6FF', color: '#3B82F6' },
-    accepted:   { label: 'Active',     bg: '#D1FAE5', color: '#059669' },
-    active:     { label: 'Active',     bg: '#D1FAE5', color: '#059669' },
-    in_progress:{ label: 'Active',     bg: '#D1FAE5', color: '#059669' },
-    resolved:   { label: 'Resolved',   bg: '#D1FAE5', color: '#059669' },
-    completed:  { label: 'Completed',  bg: '#D1FAE5', color: '#059669' },
-    declined:   { label: 'Declined',   bg: '#FEE2E2', color: '#DC2626' },
-    rejected:   { label: 'Rejected',   bg: '#FEE2E2', color: '#DC2626' },
-    closed:     { label: 'Closed',     bg: '#F3F4F6', color: '#6B7280' },
-  }
-  const cfg = map[status] || { label: status, bg: '#F3F4F6', color: '#6B7280' }
+  const cfg = STYLES[status] || { label: status || 'Unknown', bg: '#F3F4F6', color: '#6B7280' }
   return (
     <span style={{
       padding: '3px 10px', borderRadius: 100, fontSize: 11,
       fontWeight: 700, background: cfg.bg, color: cfg.color,
-      textTransform: 'uppercase', letterSpacing: '0.5px'
+      textTransform: 'uppercase', letterSpacing: '0.5px', flexShrink: 0,
     }}>
       {cfg.label}
     </span>
   )
 }
 
-// ── Task Card ─────────────────────────────────────────────────────────────────
+// ── Task card ───────────────────────────────────────────────────────────────
 function TaskCard({ task, onAccept, onDecline, onResolve }) {
   const state = getState(task)
-  const urgency = getUrgencyColor(task.urgency)
-  const status = task.status || task.match_status || 'pending'
+  const urgency = getUrgencyStyle(task.urgency)
+  const status = task.match_status || task.status || 'pending'
 
   return (
     <div style={{
       background: T.white, borderRadius: 18, padding: 20,
-      border: `1px solid ${T.border}`, boxShadow: T.shadowSm
+      border: `1px solid ${T.border}`, boxShadow: T.shadowSm,
     }}>
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
-        <h4 style={{ fontSize: 15, fontWeight: 700, color: T.textPrimary, flex: 1, marginRight: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10, gap: 8 }}>
+        <h4 style={{ fontSize: 15, fontWeight: 700, color: T.textPrimary, flex: 1, margin: 0 }}>
           {task.title || task.summary || 'Volunteer Task'}
         </h4>
         <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-          <span style={{
-            padding: '3px 10px', borderRadius: 100, fontSize: 11, fontWeight: 700,
-            background: urgency.bg, color: urgency.color
-          }}>
+          <span style={{ padding: '3px 10px', borderRadius: 100, fontSize: 11, fontWeight: 700, background: urgency.bg, color: urgency.color }}>
             {urgency.label}
           </span>
-          <StatusTag status={status} />
+          <StatusTag status={status} verified={task.verified} /> 
         </div>
       </div>
 
       {/* Description */}
-      <p style={{ fontSize: 13, color: T.textSecondary, marginBottom: 12, lineHeight: 1.5 }}>
+      <p style={{ fontSize: 13, color: T.textSecondary, marginBottom: 12, lineHeight: 1.5, margin: '0 0 12px 0' }}>
         {task.description || task.raw_report || 'No description available'}
       </p>
 
       {/* Meta */}
-      <div style={{ display: 'flex', gap: 12, fontSize: 12, color: T.textTertiary, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 10, fontSize: 12, color: T.textTertiary, marginBottom: 16, flexWrap: 'wrap' }}>
         <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
           <MapPin size={12} />
           {task.location || task.location_hint || 'Unknown location'}
         </span>
         {task.category && (
-          <span style={{
-            background: T.surface2, padding: '2px 8px',
-            borderRadius: 6, textTransform: 'capitalize'
-          }}>
+          <span style={{ background: T.surface2, padding: '2px 8px', borderRadius: 6, textTransform: 'capitalize' }}>
             {task.category}
           </span>
         )}
       </div>
 
       {/* Actions */}
-      {state === 'pending' && (
-        <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={() => onAccept(task)}
-            style={{
-              flex: 1, padding: '11px 16px',
-              background: T.primary, color: '#fff',
-              border: 0, borderRadius: 12, fontWeight: 600,
-              fontSize: 14, cursor: 'pointer'
-            }}
-          >
-            Accept
-          </button>
-          <button
-            onClick={() => onDecline(task)}
-            style={{
-              flex: 1, padding: '11px 16px',
-              background: T.surface2, color: T.textSecondary,
-              border: 0, borderRadius: 12, fontWeight: 600,
-              fontSize: 14, cursor: 'pointer'
-            }}
-          >
-            Decline
-          </button>
-        </div>
-      )}
+{state === 'pending' && (
+  <div style={{ display: 'flex', gap: 10 }}>
+    <button
+      onClick={(e) => { e.stopPropagation(); onAccept(task) }}  // ✅ Added e.stopPropagation()
+      style={{ flex: 1, padding: '11px 16px', background: T.primary, color: '#fff', border: 0, borderRadius: 12, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+    >
+      Accept
+    </button>
+    <button
+      onClick={(e) => { e.stopPropagation(); onDecline(task) }}  // ✅ Added e.stopPropagation()
+      style={{ flex: 1, padding: '11px 16px', background: T.surface2, color: T.textSecondary, border: 0, borderRadius: 12, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+    >
+      Decline
+    </button>
+  </div>
+)}
 
-      {state === 'active' && (
-        <button
-          onClick={() => onResolve(task)}
-          style={{
-            width: '100%', padding: '11px 16px',
-            background: T.success, color: '#fff',
-            border: 0, borderRadius: 12, fontWeight: 600,
-            fontSize: 14, cursor: 'pointer'
-          }}
-        >
-          ✓ Mark as Resolved
-        </button>
-      )}
+{state === 'active' && (
+  <button
+    onClick={(e) => { e.stopPropagation(); onResolve(task) }}  // ✅ Added e.stopPropagation()
+    style={{ width: '100%', padding: '11px 16px', background: T.success, color: '#fff', border: 0, borderRadius: 12, fontWeight: 600, fontSize: 14, cursor: 'pointer' }}
+  >
+    ✓ Mark as Resolved
+  </button>
+)}
 
       {state === 'completed' && (
-        <div style={{
-          padding: '10px 16px', borderRadius: 12, textAlign: 'center',
-          fontWeight: 700, fontSize: 13,
-          background: status === 'declined' || status === 'rejected'
-            ? '#FEE2E2' : '#D1FAE5',
-          color: status === 'declined' || status === 'rejected'
-            ? '#DC2626' : '#059669'
-        }}>
-          {status === 'declined' || status === 'rejected'
-            ? '✕ Task Declined'
-            : '✓ Completed'}
-        </div>
-      )}
+  <div style={{
+    padding: '10px 16px', borderRadius: 12, textAlign: 'center', fontWeight: 700, fontSize: 13,
+    // ✅ Updated: Check verified field for resolved tasks
+    background: (status === 'declined' || status === 'rejected') ? '#FEE2E2' 
+              : (status === 'under_review' && !task.verified) ? '#FEF3C7' 
+              : '#D1FAE5',
+    color: (status === 'declined' || status === 'rejected') ? '#DC2626' 
+          : (status === 'under_review' && !task.verified) ? '#D97706'  
+          : '#059669',
+  }}>
+    {status === 'declined' || status === 'rejected'
+      ? '✕ Task Declined'
+      : status === 'under_review' && !task.verified  // ✅ Check verified field
+      ? '⏳ Pending Verification'
+      : '✓ Verified & Closed'}
+  </div>
+)}
     </div>
   )
 }
 
-// ── Main Page ─────────────────────────────────────────────────────────────────
+// ── Map panel (right column, desktop only) ────────────────────────────────────
+function TaskMapPanel({ task }) {
+  // ✅ Universal coordinate extractor — works for ALL task states
+  const getCoords = (t) => {
+    if (!t) return null
+    
+    // Try every possible coordinate field name in order of likelihood
+    const candidates = [
+      t.coords,
+      t.location_coords,
+      t.locationCoords,
+      t.geo,
+      t.coordinates,
+      t.latlng,
+      t.lat_lng,
+      t.position,
+      // Fallback: parse from location_hint if it contains coords
+      t.location_hint,
+      t.location,
+      t.raw_location
+    ]
+    
+    for (const c of candidates) {
+      if (!c) continue
+      
+      // Array format: [lat, lng]
+      if (Array.isArray(c) && c.length >= 2) {
+        const lat = Number(c[0]), lng = Number(c[1])
+        if (!isNaN(lat) && !isNaN(lng)) return { lat, lng }
+      }
+      
+      // String format: "lat, lng" or "(lat, lng)" or "Place (lat, lng)"
+      if (typeof c === 'string') {
+        // Extract from parentheses: "Place (17.385, 78.4867)"
+        const parenMatch = c.match(/\(([-\d.]+),\s*([-\d.]+)\)/)
+        if (parenMatch) {
+          const lat = parseFloat(parenMatch[1]), lng = parseFloat(parenMatch[2])
+          if (!isNaN(lat) && !isNaN(lng)) return { lat, lng }
+        }
+        // Extract from plain CSV: "17.385, 78.4867"
+        const csvMatch = c.match(/^([-\d.]+),\s*([-\d.]+)$/)
+        if (csvMatch) {
+          const lat = parseFloat(csvMatch[1]), lng = parseFloat(csvMatch[2])
+          if (!isNaN(lat) && !isNaN(lng)) return { lat, lng }
+        }
+      }
+      
+      // Object format: { lat: ..., lng: ... }
+      if (c && typeof c === 'object' && c.lat != null && c.lng != null) {
+        const lat = Number(c.lat), lng = Number(c.lng)
+        if (!isNaN(lat) && !isNaN(lng)) return { lat, lng }
+      }
+    }
+    
+    return null
+  }
+
+  const coords = getCoords(task)
+  const center = coords || { lat: 17.385, lng: 78.4867 } // fallback: Hyderabad
+
+  return (
+    <div style={{
+      background: T.white, borderRadius: 18, padding: 16,
+      border: `1px solid ${T.border}`, boxShadow: T.shadowSm,
+    }}>
+      <div style={{ fontWeight: 700, marginBottom: 10, fontSize: 14, color: T.textPrimary }}>
+        {task ? `📍 ${task.title || task.summary || 'Task Location'}` : 'Location Preview'}
+      </div>
+      <div style={{ borderRadius: 14, overflow: 'hidden', height: 220 }}>
+        <MapPreview
+          lat={center.lat}
+          lng={center.lng}
+          zoom={coords ? 15 : 11}
+          showSingleMarker={!!coords}  // ✅ Show pin whenever we have valid coords
+          singleMarkerColor="#ef4444"
+          height="220px"
+        />
+      </div>
+      {task?.location || task?.location_hint ? (
+        <p style={{ fontSize: 12, color: T.textSecondary, marginTop: 8, marginBottom: 0 }}>
+          {task.location || task.location_hint}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 export default function VolunteerDashboardPage() {
   const { user, setSession } = useSession()
   const navigate = useNavigate()
   const isMobile = useIsMobile(1024)
   const { pending, active, completed, loading } = useVolunteerTasks(user?.uid)
 
-  const [activeTab, setActiveTab]         = useState('pending')
-  const [selectedTask, setSelectedTask]   = useState(null)
+  const [activeTab, setActiveTab] = useState('pending')
+  const [selectedTask, setSelectedTask] = useState(null)
   const [showResolution, setShowResolution] = useState(false)
-  const [isAvailable, setIsAvailable]     = useState(user?.availability ?? true)
-  const [availLoading, setAvailLoading]   = useState(false)
+  const [isAvailable, setIsAvailable] = useState(user?.availability ?? true)
+  const [availLoading, setAvailLoading] = useState(false)
 
-  const currentList =
-    activeTab === 'pending'   ? pending :
-    activeTab === 'active'    ? active  : completed
+  const currentList = activeTab === 'pending' ? pending : activeTab === 'active' ? active : completed
+  const mapTask = selectedTask || currentList[0] || null
 
   const handleToggleAvailability = useCallback(async (val) => {
-    if (val === isAvailable) return
+    if (val === isAvailable || availLoading) return
     setAvailLoading(true)
     try {
       await setVolunteerAvailability(user?.uid, val)
       setIsAvailable(val)
-      // Update session so profile reflects change
       setSession({ role: 'volunteer', user: { ...user, availability: val } })
-      showSuccess(val ? 'You are now available for tasks' : 'You are now set as Away')
-    } catch (err) {
+      showSuccess(val ? 'You are now available for tasks' : 'You are set as Away')
+    } catch {
       showError('Failed to update availability')
     } finally {
       setAvailLoading(false)
     }
-  }, [isAvailable, user, setSession])
+  }, [isAvailable, availLoading, user, setSession])
 
   const handleAccept = useCallback(async (task) => {
     try {
       const isMatch = !task.is_recommendation
-      const taskId  = task.id || task.match_id
-      await acceptTask(taskId, user?.uid, isMatch)
+      await acceptTask(task.id, user?.uid, isMatch)
       showSuccess('Task accepted!')
       setSelectedTask(null)
       setActiveTab('active')
     } catch (err) {
-      showError('Failed to accept task: ' + err.message)
+      showError('Failed to accept task: ' + (err?.message || ''))
     }
-  }, [user])
+  }, [user?.uid])
 
   const handleDecline = useCallback(async (task) => {
     try {
       const isMatch = !task.is_recommendation
-      const taskId  = task.id || task.match_id
-      await declineTask(taskId, user?.uid, isMatch)
+      await declineTask(task.id, user?.uid, isMatch)
       showSuccess('Task declined')
       setSelectedTask(null)
-      // stays in pending list until Firestore snapshot fires
-    } catch (err) {
+    } catch {
       showError('Failed to decline task')
     }
-  }, [user])
+  }, [user?.uid])
 
+  // ✅ FIXED: Use need_id || id for recommendations
   const handleResolveSubmit = useCallback(async (data) => {
+    if (!selectedTask) return
     try {
-      await submitResolution(selectedTask.id, selectedTask.need_id, data)
+      // For recommendations, need_id = task.id; for matches, use separate need_id
+      const needId = selectedTask.need_id || selectedTask.id
+      await submitResolution(selectedTask.id, needId, data)
       showSuccess('Task resolved!')
       setSelectedTask(null)
       setShowResolution(false)
       setActiveTab('completed')
-    } catch (err) {
+    } catch {
       showError('Failed to submit resolution')
     }
   }, [selectedTask])
-
-  const mapTask = selectedTask || currentList[0] || null
 
   return (
     <PageTransition>
       <div style={{ background: T.surface2, minHeight: '100vh', padding: isMobile ? 14 : 28 }}>
         <div style={{ maxWidth: 1400, margin: '0 auto' }}>
 
-          {/* ── Profile header ── */}
+          {/* Profile header */}
           <div style={{
             background: T.white, borderRadius: 20, padding: 20,
             marginBottom: 24, display: 'flex',
             justifyContent: 'space-between', alignItems: 'center',
-            border: `1px solid ${T.border}`, boxShadow: T.shadowSm
+            border: `1px solid ${T.border}`, boxShadow: T.shadowSm, gap: 12,
           }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
               <div style={{
                 width: 52, height: 52, borderRadius: '50%',
                 background: T.primary, display: 'flex',
                 alignItems: 'center', justifyContent: 'center',
-                color: '#fff', fontWeight: 800, fontSize: 20
+                color: '#fff', fontWeight: 800, fontSize: 20, flexShrink: 0,
               }}>
-                {user?.name?.charAt(0) || 'V'}
+                {(user?.name || 'V').charAt(0).toUpperCase()}
               </div>
               <div>
                 <div style={{ fontSize: 16, fontWeight: 700, color: T.textPrimary }}>
                   {user?.name || 'Volunteer'}
                 </div>
-                <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
-                  {user?.skills?.slice(0, 3).map(s => (
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
+                  {(user?.skills || []).slice(0, 3).map(s => (
                     <span key={s} style={{
                       fontSize: 10, fontWeight: 700, textTransform: 'uppercase',
                       background: T.surface2, color: T.textSecondary,
-                      padding: '2px 8px', borderRadius: 100
+                      padding: '2px 8px', borderRadius: 100,
                     }}>{s}</span>
                   ))}
-                  {user?.rating && (
+                  {user?.rating != null && (
                     <span style={{
                       fontSize: 10, fontWeight: 700,
                       background: `${T.success}15`, color: T.success,
                       padding: '2px 8px', borderRadius: 100,
-                      display: 'flex', alignItems: 'center', gap: 3
+                      display: 'flex', alignItems: 'center', gap: 3,
                     }}>
                       <Star size={9} fill="currentColor" /> {user.rating}
                     </span>
@@ -422,113 +389,111 @@ export default function VolunteerDashboardPage() {
               </div>
             </div>
 
-            {/* ── Availability toggle ── */}
+            {/* Availability toggle */}
             <div style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              background: T.surface2, padding: '5px 5px',
+              display: 'flex', alignItems: 'center', gap: 4,
+              background: T.surface2, padding: '4px',
               borderRadius: 100, border: `1px solid ${T.border}`,
               opacity: availLoading ? 0.6 : 1,
-              pointerEvents: availLoading ? 'none' : 'auto'
+              pointerEvents: availLoading ? 'none' : 'auto',
+              flexShrink: 0,
             }}>
-              <button
-                onClick={() => handleToggleAvailability(true)}
-                style={{
-                  padding: '7px 18px', borderRadius: 100, border: 'none',
-                  fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  background: isAvailable ? T.success : 'transparent',
-                  color: isAvailable ? '#fff' : T.textSecondary,
-                  boxShadow: isAvailable ? '0 2px 8px rgba(0,0,0,0.1)' : 'none'
-                }}
-              >
-                Available
-              </button>
-              <button
-                onClick={() => handleToggleAvailability(false)}
-                style={{
-                  padding: '7px 18px', borderRadius: 100, border: 'none',
-                  fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                  transition: 'all 0.2s',
-                  background: !isAvailable ? T.surface3 : 'transparent',
-                  color: !isAvailable ? T.textPrimary : T.textSecondary,
-                  boxShadow: !isAvailable ? '0 2px 8px rgba(0,0,0,0.08)' : 'none'
-                }}
-              >
-                Away
-              </button>
+              {[
+                { val: true, label: 'Available', activeColor: T.success },
+                { val: false, label: 'Away', activeColor: T.surface3 },
+              ].map(({ val, label, activeColor }) => (
+                <button
+                  key={label}
+                  onClick={() => handleToggleAvailability(val)}
+                  style={{
+                    padding: '7px 18px', borderRadius: 100, border: 'none',
+                    fontSize: 13, fontWeight: 700, cursor: 'pointer', transition: 'all 0.2s',
+                    background: isAvailable === val ? activeColor : 'transparent',
+                    color: isAvailable === val ? (val ? '#fff' : T.textPrimary) : T.textSecondary,
+                    boxShadow: isAvailable === val ? '0 2px 8px rgba(0,0,0,0.1)' : 'none',
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
           </div>
 
-          {/* ── Stats  */}
+          {/* Stats */}
           <div style={{
             display: 'grid',
-            gridTemplateColumns: isMobile ? '1fr' : 'repeat(3,1fr)',
-            gap: 16, marginBottom: 26
+            gridTemplateColumns: isMobile ? 'repeat(3,1fr)' : 'repeat(3,1fr)',
+            gap: 16, marginBottom: 24,
           }}>
-            <StatCard value={pending.length}   label="Pending"   icon={Zap}          color={T.primary} />
-            <StatCard value={active.length}    label="Active"    icon={PlayCircle}    color={T.warning} />
-            <StatCard value={completed.length} label="Completed" icon={CheckCircle2}  color={T.success} />
+            <StatCard value={pending.length} label="Pending" icon={Zap} color={T.primary} />
+            <StatCard value={active.length} label="Active" icon={PlayCircle} color={T.warning} />
+            <StatCard value={completed.length} label="Completed" icon={CheckCircle2} color={T.success} />
           </div>
 
-          {/* ── Away banner ── */}
+          {/* Away banner */}
           {!isAvailable && (
             <div style={{
               background: '#FEF3C7', border: '1px solid #FCD34D',
               borderRadius: 12, padding: '12px 20px', marginBottom: 20,
               fontSize: 14, fontWeight: 600, color: '#92400E',
-              display: 'flex', alignItems: 'center', gap: 8
             }}>
-              ⚠️ You are set as Away. You won't receive new task matches until you set yourself as Available.
+              ⚠️ You are set as Away. Set yourself as Available to receive new task matches.
             </div>
           )}
 
-          {/* ── Main grid ── */}
+          {/* Main grid */}
           <div style={{
             display: 'grid',
             gridTemplateColumns: isMobile ? '1fr' : '1.6fr 1fr',
-            gap: 22
+            gap: 22, alignItems: 'start',
           }}>
             {/* Task list */}
             <div>
               <Tabs
                 tabs={[
-                  { id: 'pending',   label: 'Recommended', icon: Zap,         count: pending.length },
-                  { id: 'active',    label: 'Active',       icon: PlayCircle,  count: active.length },
-                  { id: 'completed', label: 'History',      icon: CheckCircle2 },
+                  { id: 'pending', label: 'Recommended', icon: Zap, count: pending.length },
+                  { id: 'active', label: 'Active', icon: PlayCircle, count: active.length },
+                  { id: 'completed', label: 'History', icon: CheckCircle2 },
                 ]}
                 activeTab={activeTab}
-                onTabChange={setActiveTab}
+                onTabChange={t => { setActiveTab(t); setSelectedTask(null) }}
               />
 
               <div style={{ marginTop: 18, display: 'flex', flexDirection: 'column', gap: 16 }}>
                 {loading ? (
-                  Array(3).fill(0).map((_, i) => (
-                    <div key={i} style={{
-                      height: 140, background: T.surface2,
-                      borderRadius: 18, animation: 'pulse 1.5s infinite'
-                    }} />
+                  [0, 1, 2].map(i => (
+                    <div key={i} style={{ height: 140, background: T.surface2, borderRadius: 18, opacity: 0.6 }} />
                   ))
                 ) : currentList.length === 0 ? (
                   <EmptyState
-                    title={activeTab === 'pending' ? 'No recommendations' : activeTab === 'active' ? 'No active tasks' : 'No history yet'}
-                    description={activeTab === 'pending' ? (isAvailable ? 'New tasks will appear here automatically.' : 'Set yourself as Available to receive tasks.') : 'Tasks will appear here.'}
+                    title={
+                      activeTab === 'pending' ? 'No recommendations yet' :
+                      activeTab === 'active' ? 'No active tasks' :
+                      'No history yet'
+                    }
+                    description={
+                      activeTab === 'pending' && !isAvailable
+                        ? 'Set yourself as Available to receive tasks.'
+                        : 'Tasks will appear here automatically.'
+                    }
                   />
                 ) : (
-                  <AnimatePresence>
+                  <AnimatePresence mode="popLayout">
                     {currentList.map(task => (
                       <motion.div
                         key={task.id}
                         layout
                         initial={{ opacity: 0, y: 10 }}
                         animate={{ opacity: 1, y: 0 }}
-                        exit={{ opacity: 0, scale: 0.95 }}
-                        onClick={() => setSelectedTask(task)}
+                        exit={{ opacity: 0, scale: 0.97 }}
+                        onClick={() => setSelectedTask(prev => prev?.id === task.id ? null : task)}
+                        style={{ cursor: 'pointer' }}
                       >
                         <TaskCard
                           task={task}
                           onAccept={handleAccept}
                           onDecline={handleDecline}
-                          onResolve={(t) => { setSelectedTask(t); setShowResolution(true) }}
+                          onResolve={t => { setSelectedTask(t); setShowResolution(true) }}
                         />
                       </motion.div>
                     ))}
@@ -537,30 +502,17 @@ export default function VolunteerDashboardPage() {
               </div>
             </div>
 
-            {/* Map panel — desktop only (Leaflet) */}
+            {/* Map — sticky on desktop */}
             {!isMobile && (
               <div style={{ position: 'sticky', top: 20 }}>
-                <div style={{
-                  background: T.white, borderRadius: 18, padding: 16,
-                  border: `1px solid ${T.border}`, boxShadow: T.shadowSm
-                }}>
-                  <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>
-                    {mapTask ? `📍 ${mapTask.title || 'Task Location'}` : 'Location Preview'}
-                  </div>
-                  <TaskMap task={mapTask} />
-                  {mapTask?.location && (
-                    <p style={{ fontSize: 12, color: T.textSecondary, marginTop: 8 }}>
-                      {mapTask.location}
-                    </p>
-                  )}
-                </div>
+                <TaskMapPanel task={mapTask} />
               </div>
             )}
           </div>
         </div>
 
         {/* Resolution modal */}
-        {showResolution && (
+        {showResolution && selectedTask && (
           <Modal isOpen onClose={() => setShowResolution(false)} title="Resolve Task">
             <ResolutionForm
               task={selectedTask}

@@ -114,7 +114,8 @@ def run_matching_cycle():
             print(f"  Tier {tier}: {vol.get('name')} (score={score}) → match {match_id}")
 
         update_need_status(need_id, "matched", {
-            "assigned_volunteer_id": top_matches[0]["volunteer"]["id"] if top_matches else None
+            "assigned_volunteer_id": None,
+            "match_candidates": [m["volunteer"]["id"] for m in top_matches]
         })
 
     print("\nMatching cycle complete.")

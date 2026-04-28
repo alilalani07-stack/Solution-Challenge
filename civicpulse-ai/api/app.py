@@ -298,6 +298,38 @@ def trigger_matching():
         return {"success": True, "message": "Matching cycle complete"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+
+# ------------------------
+# MATCH RESULTS
+# ------------------------
+
+@app.get("/matches/{need_id}")
+def get_matches(need_id: str):
+    try:
+        db = get_db()
+        match_docs = db.collection("matches").where("need_id", "==", need_id).stream()
+
+        matches = []
+        for doc in match_docs:
+            data = doc.to_dict()
+
+            volunteer = None
+            if data.get("volunteer_id"):
+                vol_doc = db.collection("volunteers").document(data["volunteer_id"]).get()
+                if vol_doc.exists:
+                    volunteer = {"id": vol_doc.id, **vol_doc.to_dict()}
+
+            matches.append({
+                "id": doc.id,
+                **data,
+                "volunteer": volunteer  # ✅ THIS FIXES YOUR ERROR
+            })
+
+        return {"success": True, "matches": matches}
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ------------------------

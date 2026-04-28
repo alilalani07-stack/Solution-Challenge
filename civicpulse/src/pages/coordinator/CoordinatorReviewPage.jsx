@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
-import { motion, AnimatePresence } from 'framer-motion'
-import { 
-  Home, ListChecks, Check, X, Zap, 
+import { motion } from 'framer-motion'
+import {
+  Home, ListChecks, Check, X, Zap,
   ArrowLeft, Search, Filter, ShieldAlert,
   BarChart2, MapPin, Clock, Info, FileText
 } from 'lucide-react'
+
 import PageTransition from '../../components/layout/PageTransition'
 import NeedReviewCard from '../../components/coordinator/NeedReviewCard'
 import VolunteerMatchList from '../../components/coordinator/VolunteerMatchList'
@@ -12,9 +13,16 @@ import Button from '../../components/ui/Button'
 import EmptyState from '../../components/ui/EmptyState'
 import Badge from '../../components/ui/Badge'
 import ProgressBar from '../../components/ui/ProgressBar'
+
 import { useRealtimeNeeds } from '../../hooks/useRealtimeNeeds'
-import { approveNeed, approveAndTriggerMatch, rejectNeed, verifyResolution } from '../../adapters/coordinatorAdapter'
+import {
+  approveNeed,
+  approveAndTriggerMatch,
+  rejectNeed,
+  verifyResolution
+} from '../../adapters/coordinatorAdapter'
 import { assignVolunteer } from '../../adapters/matchAdapter'
+
 import { showSuccess, showError } from '../../components/ui/Toast'
 import useIsMobile from '../../hooks/useIsMobile'
 import { T } from '../../styles/tokens'
@@ -28,14 +36,15 @@ const formatDateTime = (date) => {
 export default function CoordinatorReviewPage() {
   const isMobile = useIsMobile(1024)
   const { needs, loading: needsLoading } = useRealtimeNeeds()
+
   const [selectedNeed, setSelectedNeed] = useState(null)
   const [matches, setMatches] = useState(null)
   const [processing, setProcessing] = useState(false)
 
   const pendingReview = needs
-  .filter(n => 
-    n.status === 'pending_review' || 
-    (n.status === 'resolved' && !n.verified) 
+  .filter(n =>
+    n.status === 'pending_review' ||
+    (n.status === 'under_review' && !n.verified)
   )
   .sort((a, b) => b.priority_score - a.priority_score)
 
@@ -52,8 +61,11 @@ export default function CoordinatorReviewPage() {
       showSuccess('Need approved.')
       setSelectedNeed(null)
       setMatches(null)
-    } catch (err) { showError('Failed to approve.') }
-    finally { setProcessing(false) }
+    } catch (err) {
+      showError('Failed to approve.')
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const handleApproveAndMatch = async () => {
@@ -62,8 +74,11 @@ export default function CoordinatorReviewPage() {
       const res = await approveAndTriggerMatch(selectedNeed.id)
       setMatches(res.matches)
       showSuccess('Need approved. Dispatching matching engine...')
-    } catch (err) { showError('Matching failed.') }
-    finally { setProcessing(false) }
+    } catch (err) {
+      showError('Matching failed.')
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const handleReject = async () => {
@@ -73,8 +88,11 @@ export default function CoordinatorReviewPage() {
       showSuccess('Need rejected.')
       setSelectedNeed(null)
       setMatches(null)
-    } catch (err) { showError('Action failed.') }
-    finally { setProcessing(false) }
+    } catch (err) {
+      showError('Action failed.')
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const handleAssign = async (volunteerId, tier) => {
@@ -84,15 +102,22 @@ export default function CoordinatorReviewPage() {
       showSuccess('Volunteer assigned!')
       setSelectedNeed(null)
       setMatches(null)
-    } catch (err) { showError('Assignment failed.') }
-    finally { setProcessing(false) }
+    } catch (err) {
+      showError('Assignment failed.')
+    } finally {
+      setProcessing(false)
+    }
   }
 
   const handleVerifyResolution = async (approved) => {
     try {
       setProcessing(true)
       await verifyResolution(selectedNeed.id, approved, '')
-      showSuccess(approved ? 'Resolution verified and closed.' : 'Task reopened for reassignment.')
+      showSuccess(
+        approved
+          ? 'Resolution verified and closed.'
+          : 'Task reopened for reassignment.'
+      )
       setSelectedNeed(null)
       setMatches(null)
     } catch (err) {
@@ -104,29 +129,63 @@ export default function CoordinatorReviewPage() {
 
   return (
     <PageTransition>
-      <div style={{ display: 'flex', flexDirection: 'column', height: isMobile ? 'auto' : 'calc(100vh - 120px)', gap: '24px', padding: isMobile ? '16px' : '32px' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          height: isMobile ? 'auto' : 'calc(100vh - 120px)',
+          gap: '24px',
+          padding: isMobile ? '16px' : '32px'
+        }}
+      >
+        {/* HEADER */}
+        <div style={{ display: 'flex', justifyContent: 'space-between' }}>
           <div>
-            <h1 style={{ fontFamily: T.fontDisplay, fontSize: '32px', fontWeight: 800, color: T.textPrimary }}>Review Queue</h1>
-            <p style={{ color: T.textSecondary }}>Operational triage for incoming citizen requests.</p>
+            <h1 style={{ fontFamily: T.fontDisplay, fontSize: 32, fontWeight: 800 }}>
+              Review Queue
+            </h1>
+            <p style={{ color: T.textSecondary }}>
+              Operational triage for incoming citizen requests.
+            </p>
           </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row', gap: '24px', flex: 1, minHeight: 0 }}>
-          
+        <div style={{
+          display: 'flex',
+          flexDirection: isMobile ? 'column' : 'row',
+          gap: 24,
+          flex: 1,
+          minHeight: 0
+        }}>
+
           {/* LEFT PANEL */}
-          <div style={{ width: isMobile ? '100%' : '400px', display: 'flex', flexDirection: 'column', backgroundColor: T.surface2, borderRadius: T.radiusXl, border: `1px solid ${T.border}`, overflow: 'hidden' }}>
-            <div style={{ padding: '16px', borderBottom: `1px solid ${T.border}`, backgroundColor: T.white, display: 'flex', justifyContent: 'space-between' }}>
-              <h2 style={{ fontWeight: 800, fontSize: '15px' }}>Pending Triage ({pendingReview.length})</h2>
+          <div style={{
+            width: isMobile ? '100%' : 400,
+            display: 'flex',
+            flexDirection: 'column',
+            backgroundColor: T.surface2,
+            borderRadius: T.radiusXl,
+            border: `1px solid ${T.border}`
+          }}>
+            <div style={{ padding: 16, borderBottom: `1px solid ${T.border}` }}>
+              <h2>Pending Triage ({pendingReview.length})</h2>
             </div>
-            <div style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-              {needsLoading ? <div className="shimmer" style={{ height: '100px' }} /> : pendingReview.length === 0 ? <EmptyState title="Queue empty" /> : (
+
+            <div style={{ padding: 16, overflowY: 'auto' }}>
+              {needsLoading ? (
+                <div className="shimmer" style={{ height: 100 }} />
+              ) : pendingReview.length === 0 ? (
+                <EmptyState title="Queue empty" />
+              ) : (
                 pendingReview.map(need => (
-                  <NeedReviewCard 
+                  <NeedReviewCard
                     key={need.id}
                     need={need}
                     selected={selectedNeed?.id === need.id}
-                    onSelect={() => { setSelectedNeed(need); setMatches(null); }}
+                    onSelect={() => {
+                      setSelectedNeed(need)
+                      setMatches(null)
+                    }}
                   />
                 ))
               )}
@@ -134,105 +193,113 @@ export default function CoordinatorReviewPage() {
           </div>
 
           {/* RIGHT PANEL */}
-          <div style={{ flex: 1, backgroundColor: T.white, borderRadius: T.radiusXl, border: `1px solid ${T.border}`, boxShadow: T.shadowLg, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            
+          <div style={{
+            flex: 1,
+            backgroundColor: T.white,
+            borderRadius: T.radiusXl,
+            border: `1px solid ${T.border}`,
+            display: 'flex',
+            flexDirection: 'column'
+          }}>
             {!selectedNeed ? (
-              <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <EmptyState title="Select a request" />
-              </div>
+              <EmptyState title="Select a request" />
             ) : (
               <>
-                <div style={{ padding: '32px', flex: 1, overflowY: 'auto' }}>
-                  
-                  {/* HEADER */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '24px' }}>
-                    <div>
-                      <h2 style={{ fontFamily: T.fontDisplay, fontSize: '28px', fontWeight: 800, lineHeight: 1.2 }}>
-                        {selectedNeed.summary}
-                      </h2>
-                      <div style={{ display: 'flex', gap: '8px', marginTop: '12px' }}>
-                        <Badge value={selectedNeed.category} />
-                        <Badge value={selectedNeed.urgency} />
-                      </div>
-                    </div>
-                    <div style={{ textAlign: 'right', padding: '12px', backgroundColor: T.surface2, borderRadius: T.radiusMd }}>
-                      <span style={{ fontSize: '32px', fontWeight: 800 }}>{selectedNeed.priority_score}</span>
-                      <span style={{ fontSize: '11px', color: T.textTertiary, textTransform: 'uppercase' }}>Priority</span>
-                    </div>
-                  </div>
+                <div style={{ padding: 32, overflowY: 'auto' }}>
 
-                  {/* REPORT */}
-                  <div style={{ backgroundColor: T.surface2, padding: '20px', borderRadius: T.radiusLg, border: `1px solid ${T.border}`, marginBottom: '32px' }}>
-                    {selectedNeed.raw_report}
-                  </div>
+                  <h2>{selectedNeed.summary}</h2>
 
-                  {/* META */}
-                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginBottom: '32px' }}>
-                    <div style={{ padding: '16px', border: `1px solid ${T.border}`, borderRadius: T.radiusLg }}>
-                      <p style={{ fontSize: '11px', fontWeight: 700 }}>AI Confidence</p>
-                      <ProgressBar value={selectedNeed.confidence * 100} color={T.primary} />
-                      <p style={{ fontWeight: 800 }}>{Math.round(selectedNeed.confidence * 100)}%</p>
-                    </div>
-                    <div style={{ padding: '16px', border: `1px solid ${T.border}`, borderRadius: T.radiusLg }}>
-                      <p style={{ fontSize: '11px', fontWeight: 700 }}>Time Since Report</p>
-                      <p>{formatDateTime(selectedNeed.submitted_at)}</p>
-                    </div>
-                  </div>
-
-                  {/* ✅ NEW: RESOLUTION BLOCK */}
-                  {selectedNeed.status === 'resolved' && (
+                  {/* ✅ RESOLUTION BLOCK - FIX 1: Added spacing */}
+                  {(selectedNeed.status === 'under_review' || selectedNeed.status === 'resolved') && (
                     <div style={{
                       backgroundColor: '#F0FDF4',
                       border: '1px solid #86EFAC',
                       borderRadius: T.radiusLg,
-                      padding: '20px',
-                      marginBottom: '32px'
+                      padding: 20,
+                      marginBottom: 32
                     }}>
-                      <h4 style={{ fontSize: 13, fontWeight: 700, color: '#15803D', marginBottom: 12 }}>
+                      <h4 style={{
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: '#15803D',
+                        marginBottom: 12,
+                        textTransform: 'uppercase'
+                      }}>
                         ✓ Volunteer Resolution Report
                       </h4>
 
-                      <p>{selectedNeed.resolution_notes || 'No outcome notes provided.'}</p>
+                      {/* ✅ FIXED: Added explicit spacing styles */}
+                      <p style={{ marginTop: 0, marginBottom: 12, lineHeight: 1.5 }}>
+                        {selectedNeed.resolution_notes || 'No outcome notes provided.'}
+                      </p>
 
                       {!selectedNeed.verified && (
-                        <div style={{ marginTop: 10 }}>⏳ Pending coordinator verification</div>
+                        <div style={{ marginTop: 8 }}>⏳ Pending coordinator verification</div>
                       )}
                       {selectedNeed.verified && (
-                        <div style={{ marginTop: 10 }}>✓ Verified by coordinator</div>
+                        <div style={{ marginTop: 8, color: '#15803D', fontWeight: 600 }}>✓ Verified & Closed by coordinator</div>
                       )}
                     </div>
                   )}
 
                   {/* MATCHES */}
                   {matches && (
-                    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
-                      <VolunteerMatchList matches={matches} onAssign={handleAssign} />
+                    <motion.div>
+                      <VolunteerMatchList
+                        matches={matches}
+                        onAssign={handleAssign}
+                      />
                     </motion.div>
                   )}
-
                 </div>
 
-                {/* ✅ UPDATED BUTTON BLOCK */}
-                <div style={{ padding: '20px 32px', borderTop: `1px solid ${T.border}`, display: 'flex', justifyContent: 'flex-end', gap: '12px' }}>
-                  
-                  {selectedNeed?.status === 'resolved' ? (
+                {/* ✅ BUTTON BLOCK */}
+                <div style={{
+                  padding: 20,
+                  borderTop: `1px solid ${T.border}`,
+                  display: 'flex',
+                  justifyContent: 'flex-end',
+                  gap: 12
+                }}>
+                  {(selectedNeed?.status === 'under_review' || selectedNeed?.status === 'resolved') ? (
                     <>
-                      <Button variant="ghost" onClick={() => handleVerifyResolution(false)} disabled={processing}>
+                      <Button
+                        variant="ghost"
+                        onClick={() => handleVerifyResolution(false)}
+                        disabled={processing}
+                        style={{ color: T.urgent }}
+                      >
                         ↩ Reopen Task
                       </Button>
-                      <Button onClick={() => handleVerifyResolution(true)} disabled={processing}>
+                      <Button
+                        onClick={() => handleVerifyResolution(true)}
+                        disabled={processing}
+                        style={{ backgroundColor: T.success }}
+                      >
                         ✓ Verify & Close
                       </Button>
                     </>
                   ) : !matches ? (
                     <>
-                      <Button variant="ghost" onClick={handleReject} disabled={processing}>
+                      <Button
+                        variant="ghost"
+                        onClick={handleReject}
+                        disabled={processing}
+                        style={{ color: T.urgent }}
+                      >
                         Reject
                       </Button>
-                      <Button variant="outline" onClick={handleApprove} disabled={processing}>
+                      <Button
+                        variant="outline"
+                        onClick={handleApprove}
+                        disabled={processing}
+                      >
                         Approve to Pool
                       </Button>
-                      <Button onClick={handleApproveAndMatch} disabled={processing}>
+                      <Button
+                        onClick={handleApproveAndMatch}
+                        disabled={processing}
+                      >
                         Approve & Match
                       </Button>
                     </>
@@ -241,11 +308,11 @@ export default function CoordinatorReviewPage() {
                       Cancel Matching
                     </Button>
                   )}
-
                 </div>
               </>
             )}
           </div>
+
         </div>
       </div>
     </PageTransition>
